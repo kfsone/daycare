@@ -1,0 +1,7 @@
+go.sum
+.idea
+.vs
+.vsc
+.vscode
+*.bak
+*.exe
