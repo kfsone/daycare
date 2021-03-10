@@ -66,7 +66,7 @@ func main() {
 	// Allow our blocked worker to get their notification.
 	time.Sleep(100 * time.Millisecond)
 
-	registered, err := r.GetData()
+	registered, err := r.Values()
 	if err != nil {
 		panic(err)
 	}
