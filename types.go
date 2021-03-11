@@ -10,7 +10,7 @@ type registration struct {
 }
 
 // lookup is a blocking query for the value of a specific key. If the
-// key is not yet registered, will block until the
+// key is not yet registered, will block until the.
 type lookup struct {
 	key      string
 	response chan<- interface{}

@@ -15,7 +15,14 @@ func main() {
 	var solution interface{}
 
 	// put something into the registry.
-	r.Register("distraction", "squirrel")
+	// returns: previous, ok, err
+	//	previous: the value that is now registered (might not be yours),
+	//	ok: true if this was a successful new registration,
+	//      false if your registration was a duplicate,
+	_, _, err := r.Register("distraction", "squirrel")
+	if err != nil {
+		panic(err)
+	}
 
 	// A worker trying to look up 'answer'.
 	go func() {
@@ -46,13 +53,19 @@ func main() {
 	// A worker that will register 'question' after a few moments.
 	go func() {
 		time.Sleep(1200 * time.Millisecond)
-		r.Register("question", func() int { return 6 * 7 })
+		_, _, err = r.Register("question", func() int { return 6 * 7 })
+		if err != nil {
+			panic(err)
+		}
 	}()
 
 	// A worker that will register "answer" after more moments.
 	go func() {
 		time.Sleep(2500 * time.Millisecond)
-		r.Register("answer", 42)
+		_, _, err = r.Register("answer", 42)
+		if err != nil {
+			panic(err)
+		}
 	}()
 
 	// Time passes...

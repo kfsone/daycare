@@ -6,12 +6,6 @@ import (
 	"errors"
 )
 
-const (
-	stateClosed int32 = iota
-	stateOpening
-	stateOpen
-)
-
 // ErrRunning is returned if you attempt to access the shared data while
 // with Values() while the manageris still running; call Stop() first.
 var ErrRunning = errors.New("registry has not been close()d")

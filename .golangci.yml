@@ -1,0 +1,18 @@
+run:
+  timeout: 60s
+linters:
+  enable:
+      [ 
+        asciicheck, bodyclose, durationcheck, errcheck, errorlint, exhaustive, exportloopref, gosec, govet, makezero, nilerr, noctx, rowserrcheck, scopelint, sqlclosecheck, staticcheck, typecheck,
+        gocognit, gocyclo, nakedret, nestif,
+        gofmt, goimports,
+        bodyclose, noctx, prealloc, rowserrcheck,
+        asciicheck, depguard, dogsled, dupl, gochecknoinits, goconst, gocritic, godot, goheader, golint,
+        gomodguard, goprintffuncname, gosimple, ifshort, makezero, misspell, nolintlint, predeclared, revive, stylecheck,
+        thelper, tparallel, unconvert, wastedassign, whitespace, 
+        deadcode, ineffassign, structcheck, unparam, unused, varcheck
+    ]
+    # godox (TODO)
+    # lll (long lines)
+    # paralleltest?
+    # testpackage,

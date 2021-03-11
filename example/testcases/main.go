@@ -69,7 +69,7 @@ func main() {
 	if result3.received != 1 {
 		panic("failed registration")
 	}
-	if result3.ok != true {
+	if !result3.ok {
 		panic("wrong ok")
 	}
 	if result3.value != valueFor3 {
@@ -89,7 +89,7 @@ func main() {
 	if result4.value != valueFor3 {
 		panic("wrong value in reregistration" + fmt.Sprintf("%#+v", result4.value))
 	}
-	if result4.ok != false {
+	if result4.ok {
 		panic("wrong ok")
 	}
 
@@ -125,7 +125,7 @@ func main() {
 	if result2.received != 0 {
 		panic("received sheep")
 	}
-	if result1.ok != true {
+	if !result1.ok {
 		panic("wrong ok for monkey")
 	}
 
@@ -139,7 +139,7 @@ func main() {
 	if result2.value != nil {
 		panic("got a value for sheep")
 	}
-	if result2.ok != false {
+	if result2.ok {
 		panic("got 'ok' signal on sheep")
 	}
 }
