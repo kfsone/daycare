@@ -20,6 +20,10 @@ type Registry struct {
 	registry  map[string]interface{}
 	waitgroup sync.WaitGroup
 
+	// Callbacks
+	onDefer	  func ()
+	onResolve func (int)
+
 	// Statistics
 	Stats Stats
 }
@@ -53,12 +57,15 @@ func NewRegistry() *Registry {
 }
 
 // valueToPending sends a value to each of the listed channels in a goroutine.
-func valueToPending(wg *sync.WaitGroup, pending []chan<- interface{}, value interface{}) {
+func valueToPending(wg *sync.WaitGroup, pending []chan<- interface{}, value interface{}, handler func(int)) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		for _, waiter := range pending {
 			waiter <- value
+		}
+		if handler != nil {
+			handler(len(pending))
 		}
 	}()
 }
@@ -68,7 +75,7 @@ func (r *Registry) closePending() {
 	var pending map[string][]chan<- interface{}
 	pending, r.pending = r.pending, nil
 	for key, list := range pending {
-		valueToPending(&r.waitgroup, list, unregisteredValue)
+		valueToPending(&r.waitgroup, list, unregisteredValue, r.onResolve)
 		r.Stats.Misses += len(list)
 		delete(r.pending, key)
 	}
@@ -83,7 +90,7 @@ func (r *Registry) register(name string, value interface{}) interface{} {
 	}
 	r.registry[name] = value
 	if list, exists := r.pending[name]; exists {
-		valueToPending(&r.waitgroup, list, value)
+		valueToPending(&r.waitgroup, list, value, r.onResolve)
 		r.Stats.Resolved += len(list)
 		delete(r.pending, name)
 	}
@@ -100,6 +107,13 @@ func (r *Registry) lookup(name string, response chan<- interface{}) {
 	} else {
 		r.pending[name] = append(r.pending[name], response)
 		r.Stats.Defers++
+		if r.onDefer != nil {
+			r.waitgroup.Add(1)
+			go func () {
+				defer r.waitgroup.Done()
+				r.onDefer()
+			} ()
+		}
 	}
 }
 
@@ -184,8 +198,13 @@ func (r *Registry) Register(key string, value interface{}) (registered interface
 
 // Lookup blocks until the manager can resolve the given key or is Stop()d. If
 // the manager is Stop()d without the key being registered, value will be nil and
-// exists will be false.
+// exists will be false. If registration is closed, we don't need to block.
 func (r *Registry) Lookup(key string) (value interface{}, exists bool, err error) {
+	if r.registrations == nil {
+		value, exists = r.registry[key]
+		return value, exists, nil
+	}
+
 	// use a single-entry buffered channel so that valueToEntry doesn't get blocked
 	// when it tries to wake us.
 	response := make(chan interface{}, 1)
@@ -203,4 +222,19 @@ func (r *Registry) Lookup(key string) (value interface{}, exists bool, err error
 	default:
 		return value, true, nil
 	}
+}
+
+// OnDefer allows you to specify a callback to be invoked from the manager when
+// a query is deferred. The handler is executed in its own goroutine so as not
+// to block the manager, but must complete for the manager to be able to Stop
+// properly.
+func (r *Registry) OnDefer(handler func()) {
+	r.onDefer = handler
+}
+
+// OnResolve allows you to specify a callback that is executed from the
+// manager whenever one or more deferred lookups are resolved. The number
+// passed is the number of queries being unblocked.
+func (r *Registry) OnResolve(handler func(int)) {
+	r.onResolve = handler
 }

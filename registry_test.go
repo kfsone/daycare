@@ -10,9 +10,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const TestWaitTick = 50 * time.Microsecond
-const TestShortWait = 30 * time.Millisecond
-const TestLongWait = 200 * time.Millisecond
+const TestWaitTick = 100 * time.Microsecond
+const TestShortWait = 100 * time.Millisecond
+const TestLongWait = 250 * time.Millisecond
 
 // Test the blockedness of a waitgroup within a given time window.
 func testWaitGroup(t *testing.T, wg *sync.WaitGroup, getsDone bool, wait time.Duration) {
@@ -79,6 +79,8 @@ func TestNewRegistry(t *testing.T) {
 			assert.Len(t, reg.registry, 0)
 		}
 		assert.Equal(t, Stats{}, reg.Stats)
+		assert.Nil(t, reg.onDefer)
+		assert.Nil(t, reg.onResolve)
 	}
 	// Make sure we can read/write the channels.
 	t.Run("registrations channel", func(t *testing.T) {
@@ -96,14 +98,17 @@ func TestNewRegistry(t *testing.T) {
 }
 
 func Test_valueToPending(t *testing.T) {
+	t.Parallel()
 	t.Run("noop", func(t *testing.T) {
+		t.Parallel()
 		// Sending to an empty list with no waiters should take no time.
 		var wg sync.WaitGroup
 		var pending = make([]chan<- interface{}, 0)
-		valueToPending(&wg, pending, nil)
+		valueToPending(&wg, pending, nil, nil)
 		testWaitGroup(t, &wg, true, TestLongWait)
 	})
 	t.Run("dispatch", func(t *testing.T) {
+		t.Parallel()
 		var wg sync.WaitGroup
 		var channels = make([]chan interface{}, 3)
 		var pending = make([]chan<- interface{}, 3)
@@ -113,21 +118,21 @@ func Test_valueToPending(t *testing.T) {
 		}
 		// valueToPending should run in the background.
 		var value = &struct{ i int }{i: 42}
-		valueToPending(&wg, pending, value)
+		valueToPending(&wg, pending, value, nil)
 		// until we receive the first entry, the 3rd should block
 		t.Run("blocks", func(t *testing.T) {
 			t.Run("order", func(t *testing.T) {
-				t.Parallel()
+				//t.Parallel()
 				assert.Never(t, func() bool { return tryChannel(channels[len(channels)-1]) }, TestLongWait, TestWaitTick)
 			})
 			t.Run("waitgroup", func(t *testing.T) {
-				t.Parallel()
+				//t.Parallel()
 				testWaitGroup(t, &wg, false, TestLongWait)
 			})
 		})
 		t.Run("sends", func(t *testing.T) {
 			t.Run("receivers", func(t *testing.T) {
-				t.Parallel()
+				//t.Parallel()
 				for i := 0; i < len(pending); i++ {
 					i := i
 					t.Run(fmt.Sprintf("rx#%d", i), func(t *testing.T) {
@@ -140,6 +145,18 @@ func Test_valueToPending(t *testing.T) {
 				assert.Eventually(t, func() bool { wg.Wait(); return true }, TestLongWait, TestWaitTick)
 			})
 		})
+	})
+	t.Run("handler", func (t *testing.T) {
+		t.Parallel()
+		var wg sync.WaitGroup
+		var channel = make(chan<- interface{}, 8)
+		var count int
+		var pending = []chan<- interface{}{ channel, channel, channel, channel }
+
+		valueToPending(&wg, pending, nil, func (i int) { count =i })
+
+		testTimed(t, true, wg.Wait)
+		assert.Equal(t, 4, count)
 	})
 }
 
@@ -158,29 +175,32 @@ func TestRegistry_closePending(t *testing.T) {
 		t.Parallel()
 		reg := NewRegistry()
 		// create one channel and count the receives.
-		testCh := make(chan interface{})
+		const MaxChannels = 1024
+		testCh := make(chan interface{}, MaxChannels)
 		channelCount := 0
 
 		// create a large mapping with multiple channels to receive to
 		// 8 keys
 		reg.pending["one"] = channelList(7, testCh, &channelCount)
 		reg.pending["two"] = channelList(1, testCh, &channelCount)
-		reg.pending["three"] = channelList(402, testCh, &channelCount)
-		reg.pending["four"] = channelList(3, testCh, &channelCount)
-		reg.pending["five"] = channelList(107, testCh, &channelCount)
-		reg.pending["a"] = channelList(21, testCh, &channelCount)
+		reg.pending["three"] = channelList(11, testCh, &channelCount)
+		reg.pending["four"] = channelList(53, testCh, &channelCount)
+		reg.pending["five"] = channelList(15, testCh, &channelCount)
+		reg.pending["a"] = channelList(17, testCh, &channelCount)
 		reg.pending["z"] = channelList(9, testCh, &channelCount)
-		reg.pending["q"] = channelList(33, testCh, &channelCount)
+		reg.pending["q"] = channelList(31, testCh, &channelCount)
 		require.Len(t, reg.pending, 8)
+		require.LessOrEqual(t, channelCount, MaxChannels)
 
 		// close pending should queue up a bunch of work and then delete
 		// all the keys leaving r.pending empty but populated, while
 		// the signals all get sent. Meanwhile, the workers should be
 		// blocked because we're not receiving yet and we didn't make
 		// these non-blocking channels.
+		testWaitGroup(t, &reg.waitgroup, true, TestShortWait)
 		reg.closePending()
 		if assert.Nil(t, reg.pending) {
-			assert.Never(t, func() bool { reg.waitgroup.Wait(); return true }, 500*time.Millisecond, TestWaitTick)
+			testWaitGroup(t, &reg.waitgroup, true, TestLongWait)
 		}
 
 		// receive away, but they should all be 'unregisteredValue'.
@@ -451,7 +471,7 @@ func TestRegistry_Start(t *testing.T) {
 	t.Parallel()
 	reg := NewRegistry()
 	reg.Start()
-	// sending a lookup should cause a deferal.
+	// sending a lookup should cause a deferral.
 	testCh := make(chan interface{}, 1)
 	testTimed(t, true, func() {
 		reg.lookups <- &lookup{"bottle", testCh}
@@ -459,6 +479,7 @@ func TestRegistry_Start(t *testing.T) {
 	// but we shouldn't get a result
 	testTimed(t, false, func() {
 		<-testCh
+		fmt.Println("result acquired")
 	})
 	testTimed(t, true, reg.Stop)
 
@@ -613,43 +634,155 @@ func TestRegistry_Lookup(t *testing.T) {
 		}
 	})
 
-	reg := NewRegistry()
-	reg.registry["man"] = "plan"
-	reg.Start() // need a manager to respond for us
-
-	t.Run("hit", func(t *testing.T) {
+	t.Run("after close", func(t *testing.T) {
+		t.Parallel()
+		reg := NewRegistry()
+		reg.registry["fu"] = "bar"
+		reg.Stop()
 		var value interface{}
-		var ok bool
+		var ok = true
 		var err error
-
-		testTimed(t, true,
-			func() {
-				value, ok, err = reg.Lookup("man")
-			})
-		if assert.True(t, ok) {
-			assert.Equal(t, "plan", value)
+		if assert.Eventually(t, func () bool { value, ok, err = reg.Lookup("fizz"); return true }, TestShortWait, TestWaitTick) {
 			assert.Nil(t, err)
+			assert.Nil(t, value)
+			assert.False(t, ok)
 		}
-		assert.Equal(t, Stats{Hits: 1}, reg.Stats)
 	})
 
-	t.Run("defer-unresolved", func(t *testing.T) {
-		var value interface{} = unregisteredValue
-		var ok bool
-		var err error
+	t.Run("nominal", func(t *testing.T) {
+		t.Parallel()
+		reg := NewRegistry()
+		reg.registry["man"] = "plan"
+		reg.Start() // need a manager to respond for us
 
-		testTimed(t, true,
-			func() {
-				value, ok, err = reg.Lookup("plan")
-			},
-			func() {
-				assert.Contains(t, reg.pending, "plan")
-			},
-			func() {
-				reg.Stop()
-			})
-		assert.False(t, ok)
-		assert.Nil(t, value)
-		assert.Nil(t, err)
+		t.Run("hit", func(t *testing.T) {
+			var value interface{}
+			var ok bool
+			var err error
+
+			testTimed(t, true,
+				func() {
+					value, ok, err = reg.Lookup("man")
+				})
+			if assert.True(t, ok) {
+				assert.Equal(t, "plan", value)
+				assert.Nil(t, err)
+			}
+			assert.Equal(t, Stats{Hits: 1}, reg.Stats)
+		})
+
+		t.Run("defer-unresolved", func(t *testing.T) {
+			var value interface{} = unregisteredValue
+			var ok bool
+			var err error
+
+			testTimed(t, true,
+				func() {
+					value, ok, err = reg.Lookup("plan")
+				},
+				func() {
+					assert.Contains(t, reg.pending, "plan")
+				},
+				func() {
+					reg.Stop()
+				})
+			assert.False(t, ok)
+			assert.Nil(t, value)
+			assert.Nil(t, err)
+		})
+	})
+}
+
+func TestRegistry_OnDefer(t *testing.T) {
+	t.Parallel()
+	t.Run("sets", func (t *testing.T) {
+		t.Parallel()
+		reg := NewRegistry()
+		var invoked bool
+		reg.OnDefer(func () { invoked = true })
+		assert.NotNil(t, reg.onDefer)
+		reg.onDefer()
+		assert.True(t, invoked)
+	})
+
+	t.Run("usage", func (t *testing.T) {
+		t.Parallel()
+		var invoked bool
+		var wg sync.WaitGroup
+
+		reg := NewRegistry()
+		reg.OnDefer(func () { invoked = true })
+		require.NotNil(t, reg.onDefer)
+
+		reg.Start()
+		defer reg.Stop()
+
+		// invoked shouldn't get changed with a registered lookup.
+		testTimed(t, true, func () { reg.Register("barney", 0) })
+		testTimed(t, true, func () { reg.Lookup("barney") })
+		assert.Never(t, func () bool { return invoked }, TestShortWait, TestWaitTick)
+
+		// park a deferred lookup
+		wg.Add(1)
+		go func () {
+			defer wg.Done()
+			reg.Lookup("fred")
+		}()
+
+		testTimed(t, true, func () { reg.Register("fred", nil) })
+		assert.Eventually(t, func () bool { return invoked }, TestLongWait, TestWaitTick)
+		assert.Eventually(t, func () bool { wg.Wait(); return true }, TestShortWait, TestWaitTick)
+	})
+}
+
+func TestRegistry_OnResolve(t *testing.T) {
+	t.Parallel()
+	t.Run("sets", func (t *testing.T) {
+		t.Parallel()
+		reg := NewRegistry()
+		var count int
+		reg.OnResolve(func (i int) {
+			count = i
+		})
+		assert.NotNil(t, reg.onResolve)
+		reg.onResolve(7)
+		assert.Equal(t, 7, count)
+	})
+
+	t.Run("usage", func (t *testing.T) {
+		t.Parallel()
+		var wg sync.WaitGroup
+		var count int
+
+		reg := NewRegistry()
+		reg.Start()
+		defer reg.Stop()
+
+		reg.OnResolve(func (i int) {
+			count = i
+		})
+
+		// count shouldn't get changed with a registered lookup.
+		testTimed(t, true, func () { reg.Register("fred", 0) })
+		testTimed(t, true, func () { reg.Lookup("fred") })
+		assert.Never(t, func () bool { return count > 0 }, TestShortWait, TestWaitTick)
+
+		wg.Add(2)
+		go func () {
+			defer wg.Done()
+			reg.Lookup("barney")
+		} ()
+		go func () {
+			defer wg.Done()
+			reg.Lookup("barney")
+		} ()
+
+		testWaitGroup(t,&wg, false, TestShortWait)
+		testTimed(t, true, func () { reg.Register("barney", nil) })
+		assert.Eventually(t, func () bool { return count == 2 }, TestShortWait, TestWaitTick)
+		testTimed(t, true, func () { reg.Register("fred", nil) })
+		assert.Never(t, func () bool { return count > 2 }, TestShortWait, TestWaitTick)
+
+		testTimed(t, true, wg.Wait)
 	})
 }
