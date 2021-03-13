@@ -167,7 +167,9 @@ func TestRegistry_closePending(t *testing.T) {
 		reg := NewRegistry()
 		reg.closePending()
 		testWaitGroup(t, &reg.waitgroup, true, TestShortWait)
-		assert.Nil(t, reg.pending)
+		if assert.NotNil(t, reg.pending) {
+			assert.Len(t, reg.pending, 0)
+		}
 		assert.Equal(t, Stats{}, reg.Stats)
 	})
 
@@ -199,8 +201,10 @@ func TestRegistry_closePending(t *testing.T) {
 		// these non-blocking channels.
 		testWaitGroup(t, &reg.waitgroup, true, TestShortWait)
 		reg.closePending()
-		if assert.Nil(t, reg.pending) {
-			testWaitGroup(t, &reg.waitgroup, true, TestLongWait)
+		if assert.NotNil(t, reg.pending) {
+			if assert.Len(t, reg.pending, 0) {
+				testWaitGroup(t, &reg.waitgroup, true, TestLongWait)
+			}
 		}
 
 		// receive away, but they should all be 'unregisteredValue'.
@@ -412,8 +416,6 @@ func TestRegistry_manager(t *testing.T) {
 		assert.Len(t, reg.registry, 0)
 		close(reg.registrations)
 		testWaitGroup(t, &reg.waitgroup, true, TestLongWait)
-		// verify that it called closePending...
-		assert.Nil(t, reg.pending)
 		assert.Len(t, reg.registry, 0)
 		assert.Equal(t, Stats{}, reg.Stats)
 		assert.Nil(t, reg.lookups)
