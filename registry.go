@@ -21,8 +21,8 @@ type Registry struct {
 	waitgroup sync.WaitGroup
 
 	// Callbacks
-	onDefer	  func ()
-	onResolve func (int)
+	onDefer   func()
+	onResolve func(int)
 
 	// Statistics
 	Stats Stats
@@ -109,10 +109,10 @@ func (r *Registry) lookup(name string, response chan<- interface{}) {
 		r.Stats.Defers++
 		if r.onDefer != nil {
 			r.waitgroup.Add(1)
-			go func () {
+			go func() {
 				defer r.waitgroup.Done()
 				r.onDefer()
-			} ()
+			}()
 		}
 	}
 }

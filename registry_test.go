@@ -146,14 +146,14 @@ func Test_valueToPending(t *testing.T) {
 			})
 		})
 	})
-	t.Run("handler", func (t *testing.T) {
+	t.Run("handler", func(t *testing.T) {
 		t.Parallel()
 		var wg sync.WaitGroup
 		var channel = make(chan<- interface{}, 8)
 		var count int
-		var pending = []chan<- interface{}{ channel, channel, channel, channel }
+		var pending = []chan<- interface{}{channel, channel, channel, channel}
 
-		valueToPending(&wg, pending, nil, func (i int) { count =i })
+		valueToPending(&wg, pending, nil, func(i int) { count = i })
 
 		testTimed(t, true, wg.Wait)
 		assert.Equal(t, 4, count)
@@ -489,14 +489,14 @@ func TestRegistry_Start(t *testing.T) {
 		assert.Eventually(t, func() bool { return reg.lookups == nil }, TestShortWait, TestWaitTick)
 	})
 
-	t.Run("restart", func (t *testing.T) {
+	t.Run("restart", func(t *testing.T) {
 		t.Parallel()
 		reg := NewRegistry()
 		reg.Stop()
 		require.Nil(t, reg.registrations)
 		reg.Start()
 		assert.NotNil(t, reg.registrations)
-		testTimed(t, true, func () { reg.Register("french", "fries") })
+		testTimed(t, true, func() { reg.Register("french", "fries") })
 		reg.Stop()
 		assert.Contains(t, reg.registry, "french")
 	})
@@ -657,7 +657,7 @@ func TestRegistry_Lookup(t *testing.T) {
 		var value interface{}
 		var ok = true
 		var err error
-		if assert.Eventually(t, func () bool { value, ok, err = reg.Lookup("fizz"); return true }, TestShortWait, TestWaitTick) {
+		if assert.Eventually(t, func() bool { value, ok, err = reg.Lookup("fizz"); return true }, TestShortWait, TestWaitTick) {
 			assert.Nil(t, err)
 			assert.Nil(t, value)
 			assert.False(t, ok)
@@ -710,53 +710,53 @@ func TestRegistry_Lookup(t *testing.T) {
 
 func TestRegistry_OnDefer(t *testing.T) {
 	t.Parallel()
-	t.Run("sets", func (t *testing.T) {
+	t.Run("sets", func(t *testing.T) {
 		t.Parallel()
 		reg := NewRegistry()
 		var invoked bool
-		reg.OnDefer(func () { invoked = true })
+		reg.OnDefer(func() { invoked = true })
 		assert.NotNil(t, reg.onDefer)
 		reg.onDefer()
 		assert.True(t, invoked)
 	})
 
-	t.Run("usage", func (t *testing.T) {
+	t.Run("usage", func(t *testing.T) {
 		t.Parallel()
 		var invoked bool
 		var wg sync.WaitGroup
 
 		reg := NewRegistry()
-		reg.OnDefer(func () { invoked = true })
+		reg.OnDefer(func() { invoked = true })
 		require.NotNil(t, reg.onDefer)
 
 		reg.Start()
 		defer reg.Stop()
 
 		// invoked shouldn't get changed with a registered lookup.
-		testTimed(t, true, func () { reg.Register("barney", 0) })
-		testTimed(t, true, func () { reg.Lookup("barney") })
-		assert.Never(t, func () bool { return invoked }, TestShortWait, TestWaitTick)
+		testTimed(t, true, func() { reg.Register("barney", 0) })
+		testTimed(t, true, func() { reg.Lookup("barney") })
+		assert.Never(t, func() bool { return invoked }, TestShortWait, TestWaitTick)
 
 		// park a deferred lookup
 		wg.Add(1)
-		go func () {
+		go func() {
 			defer wg.Done()
 			reg.Lookup("fred")
 		}()
 
-		testTimed(t, true, func () { reg.Register("fred", nil) })
-		assert.Eventually(t, func () bool { return invoked }, TestLongWait, TestWaitTick)
-		assert.Eventually(t, func () bool { wg.Wait(); return true }, TestShortWait, TestWaitTick)
+		testTimed(t, true, func() { reg.Register("fred", nil) })
+		assert.Eventually(t, func() bool { return invoked }, TestLongWait, TestWaitTick)
+		assert.Eventually(t, func() bool { wg.Wait(); return true }, TestShortWait, TestWaitTick)
 	})
 }
 
 func TestRegistry_OnResolve(t *testing.T) {
 	t.Parallel()
-	t.Run("sets", func (t *testing.T) {
+	t.Run("sets", func(t *testing.T) {
 		t.Parallel()
 		reg := NewRegistry()
 		var count int
-		reg.OnResolve(func (i int) {
+		reg.OnResolve(func(i int) {
 			count = i
 		})
 		assert.NotNil(t, reg.onResolve)
@@ -764,7 +764,7 @@ func TestRegistry_OnResolve(t *testing.T) {
 		assert.Equal(t, 7, count)
 	})
 
-	t.Run("usage", func (t *testing.T) {
+	t.Run("usage", func(t *testing.T) {
 		t.Parallel()
 		var wg sync.WaitGroup
 		var count int
@@ -773,30 +773,30 @@ func TestRegistry_OnResolve(t *testing.T) {
 		reg.Start()
 		defer reg.Stop()
 
-		reg.OnResolve(func (i int) {
+		reg.OnResolve(func(i int) {
 			count = i
 		})
 
 		// count shouldn't get changed with a registered lookup.
-		testTimed(t, true, func () { reg.Register("fred", 0) })
-		testTimed(t, true, func () { reg.Lookup("fred") })
-		assert.Never(t, func () bool { return count > 0 }, TestShortWait, TestWaitTick)
+		testTimed(t, true, func() { reg.Register("fred", 0) })
+		testTimed(t, true, func() { reg.Lookup("fred") })
+		assert.Never(t, func() bool { return count > 0 }, TestShortWait, TestWaitTick)
 
 		wg.Add(2)
-		go func () {
+		go func() {
 			defer wg.Done()
 			reg.Lookup("barney")
-		} ()
-		go func () {
+		}()
+		go func() {
 			defer wg.Done()
 			reg.Lookup("barney")
-		} ()
+		}()
 
-		testWaitGroup(t,&wg, false, TestShortWait)
-		testTimed(t, true, func () { reg.Register("barney", nil) })
-		assert.Eventually(t, func () bool { return count == 2 }, TestShortWait, TestWaitTick)
-		testTimed(t, true, func () { reg.Register("fred", nil) })
-		assert.Never(t, func () bool { return count > 2 }, TestShortWait, TestWaitTick)
+		testWaitGroup(t, &wg, false, TestShortWait)
+		testTimed(t, true, func() { reg.Register("barney", nil) })
+		assert.Eventually(t, func() bool { return count == 2 }, TestShortWait, TestWaitTick)
+		testTimed(t, true, func() { reg.Register("fred", nil) })
+		assert.Never(t, func() bool { return count > 2 }, TestShortWait, TestWaitTick)
 
 		testTimed(t, true, wg.Wait)
 	})
