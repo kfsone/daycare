@@ -469,22 +469,37 @@ func TestRegistry_manager(t *testing.T) {
 
 func TestRegistry_Start(t *testing.T) {
 	t.Parallel()
-	reg := NewRegistry()
-	reg.Start()
-	// sending a lookup should cause a deferral.
-	testCh := make(chan interface{}, 1)
-	testTimed(t, true, func() {
-		reg.lookups <- &lookup{"bottle", testCh}
-	})
-	// but we shouldn't get a result
-	testTimed(t, false, func() {
-		<-testCh
-		fmt.Println("result acquired")
-	})
-	testTimed(t, true, reg.Stop)
+	t.Run("nominal", func(t *testing.T) {
+		t.Parallel()
+		reg := NewRegistry()
+		reg.Start()
+		// sending a lookup should cause a deferral.
+		testCh := make(chan interface{}, 1)
+		testTimed(t, true, func() {
+			reg.lookups <- &lookup{"bottle", testCh}
+		})
+		// but we shouldn't get a result
+		testTimed(t, false, func() {
+			<-testCh
+			fmt.Println("result acquired")
+		})
+		testTimed(t, true, reg.Stop)
 
-	// and verify that stopping the manager shut down the lookups
-	assert.Eventually(t, func() bool { return reg.lookups == nil }, TestShortWait, TestWaitTick)
+		// and verify that stopping the manager shut down the lookups
+		assert.Eventually(t, func() bool { return reg.lookups == nil }, TestShortWait, TestWaitTick)
+	})
+
+	t.Run("restart", func (t *testing.T) {
+		t.Parallel()
+		reg := NewRegistry()
+		reg.Stop()
+		require.Nil(t, reg.registrations)
+		reg.Start()
+		assert.NotNil(t, reg.registrations)
+		testTimed(t, true, func () { reg.Register("french", "fries") })
+		reg.Stop()
+		assert.Contains(t, reg.registry, "french")
+	})
 }
 
 func TestRegistry_Stop(t *testing.T) {

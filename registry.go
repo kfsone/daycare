@@ -127,11 +127,12 @@ func (r *Registry) manager() {
 	}()
 
 	open := true
+	reg := r.registrations
 	for open {
 		select {
 		case query := <-r.lookups:
 			r.lookup(query.key, query.response)
-		case reg, ok := <-r.registrations:
+		case reg, ok := <-reg:
 			if !ok { // channel closed, we're done
 				open = false
 			} else {
@@ -145,6 +146,9 @@ func (r *Registry) manager() {
 
 // Start starts a goroutine handling Registration and Lookup calls.
 func (r *Registry) Start() {
+	if r.registrations == nil { // restart.
+		r.registrations = make(chan *registration)
+	}
 	r.waitgroup.Add(1)
 	go r.manager()
 }
@@ -159,11 +163,10 @@ func (r *Registry) Stop() {
 
 	// send the stop notification
 	close(r.registrations)
+	r.registrations = nil
 
 	// wait for all tasks to finish
 	r.waitgroup.Wait()
-
-	r.registrations = nil
 }
 
 // Values returns the key-value map after the registry is Stop()d.
