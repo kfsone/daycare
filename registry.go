@@ -48,8 +48,8 @@ type Stats struct {
 // Manage() to enable Register/Lookup calls, and Close() to enable access to data.
 func NewRegistry() *Registry {
 	return &Registry{
-		registrations: make(chan *registration),
-		lookups:       make(chan *lookup),
+		registrations: nil,  // populate on Start()
+		lookups:       nil,  // populate on Start()
 		pending:       make(map[string][]chan<- interface{}),
 		registry:      make(map[string]interface{}),
 		Stats:         Stats{},
@@ -72,9 +72,7 @@ func valueToPending(wg *sync.WaitGroup, pending []chan<- interface{}, value inte
 
 func (r *Registry) closePending() {
 	// Tell all the blocked queries there's no-such-value.
-	var pending map[string][]chan<- interface{}
-	pending, r.pending = r.pending, nil
-	for key, list := range pending {
+	for key, list := range r.pending {
 		valueToPending(&r.waitgroup, list, unregisteredValue, r.onResolve)
 		r.Stats.Misses += len(list)
 		delete(r.pending, key)
@@ -125,30 +123,26 @@ func (r *Registry) manager() {
 		close(r.lookups)
 		r.lookups = nil
 	}()
+	defer r.closePending()
 
-	open := true
-	reg := r.registrations
-	for open {
+	for {
 		select {
 		case query := <-r.lookups:
 			r.lookup(query.key, query.response)
-		case reg, ok := <-reg:
+		case reg, ok := <-r.registrations:
 			if !ok { // channel closed, we're done
-				open = false
+				return
 			} else {
 				reg.response <- r.register(reg.key, reg.value)
 			}
 		}
 	}
-
-	r.closePending()
 }
 
 // Start starts a goroutine handling Registration and Lookup calls.
 func (r *Registry) Start() {
-	if r.registrations == nil { // restart.
-		r.registrations = make(chan *registration)
-	}
+	r.registrations = make(chan *registration)
+	r.lookups = make(chan *lookup)
 	r.waitgroup.Add(1)
 	go r.manager()
 }
@@ -163,15 +157,16 @@ func (r *Registry) Stop() {
 
 	// send the stop notification
 	close(r.registrations)
-	r.registrations = nil
 
 	// wait for all tasks to finish
 	r.waitgroup.Wait()
+
+	r.registrations = nil
 }
 
 // Values returns the key-value map after the registry is Stop()d.
 func (r *Registry) Values() (map[string]interface{}, error) {
-	if r.pending != nil {
+	if r.registrations != nil {
 		return nil, ErrRunning
 	}
 	return r.registry, nil

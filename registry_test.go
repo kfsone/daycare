@@ -70,8 +70,8 @@ func tryChannel(c <-chan interface{}) bool {
 func TestNewRegistry(t *testing.T) {
 	reg := NewRegistry()
 	if assert.NotNil(t, reg) {
-		assert.NotNil(t, reg.registrations)
-		assert.NotNil(t, reg.lookups)
+		assert.Nil(t, reg.registrations)
+		assert.Nil(t, reg.lookups)
 		if assert.NotNil(t, reg.pending) {
 			assert.Len(t, reg.pending, 0)
 		}
@@ -82,19 +82,6 @@ func TestNewRegistry(t *testing.T) {
 		assert.Nil(t, reg.onDefer)
 		assert.Nil(t, reg.onResolve)
 	}
-	// Make sure we can read/write the channels.
-	t.Run("registrations channel", func(t *testing.T) {
-		testTimed(t, true,
-			func() { <-reg.registrations },
-			func() { reg.registrations <- nil })
-		assert.Equal(t, Stats{}, reg.Stats)
-	})
-	t.Run("lookups channel", func(t *testing.T) {
-		testTimed(t, true,
-			func() { <-reg.lookups },
-			func() { reg.lookups <- nil })
-		assert.Equal(t, Stats{}, reg.Stats)
-	})
 }
 
 func Test_valueToPending(t *testing.T) {
@@ -149,13 +136,19 @@ func Test_valueToPending(t *testing.T) {
 	t.Run("handler", func(t *testing.T) {
 		t.Parallel()
 		var wg sync.WaitGroup
-		var channel = make(chan<- interface{}, 8)
+		var channel = make(chan interface{}, 8)
 		var count int
 		var pending = []chan<- interface{}{channel, channel, channel, channel}
 
 		valueToPending(&wg, pending, nil, func(i int) { count = i })
 
 		testTimed(t, true, wg.Wait)
+		assert.Equal(t, 4, count)
+		close(channel)
+		count = 0
+		for range channel {
+			count++
+		}
 		assert.Equal(t, 4, count)
 	})
 }
@@ -336,6 +329,8 @@ func TestRegistry_lookup(t *testing.T) {
 	t.Run("non-blocking", func(t *testing.T) {
 		t.Parallel()
 		reg := NewRegistry()
+		reg.lookups = make(chan *lookup)
+		defer close(reg.lookups)
 		reg.registry["fu"] = "bar"
 		wg, responseCh := testLookup(reg, "fu")
 		assert.Eventually(t, func() bool { return <-responseCh == "bar" }, TestLongWait, TestWaitTick)
@@ -348,6 +343,8 @@ func TestRegistry_lookup(t *testing.T) {
 		t.Run("unresolved", func(t *testing.T) {
 			t.Parallel()
 			reg := NewRegistry()
+			reg.lookups = make(chan *lookup)
+			defer close(reg.lookups)
 			wg, responseCh := testLookup(reg, "fish")
 			testWaitGroup(t, wg, true, TestShortWait)
 			// lookup should return almost instantly, by deferring us.
@@ -384,6 +381,8 @@ func newRunningManager(t *testing.T) *Registry {
 	t.Helper()
 	reg := NewRegistry()
 	reg.waitgroup.Add(1)
+	reg.registrations = make(chan *registration)
+	reg.lookups = make(chan *lookup)
 	go reg.manager()
 	testWaitGroup(t, &reg.waitgroup, false, TestLongWait)
 	return reg
@@ -409,7 +408,9 @@ func newMockRegistry(t *testing.T, data map[string]interface{}) *mockRegistry {
 }
 
 func TestRegistry_manager(t *testing.T) {
+	t.Parallel()
 	t.Run("control", func(t *testing.T) {
+		t.Parallel()
 		reg := newRunningManager(t)
 		assert.NotNil(t, reg.pending)
 		assert.Len(t, reg.pending, 0)
@@ -421,6 +422,7 @@ func TestRegistry_manager(t *testing.T) {
 		assert.Nil(t, reg.lookups)
 	})
 	t.Run("operations", func(t *testing.T) {
+		t.Parallel()
 		t.Run("lookup", func(t *testing.T) {
 			t.Parallel()
 			t.Run("immediate", func(t *testing.T) {
@@ -471,24 +473,38 @@ func TestRegistry_manager(t *testing.T) {
 
 func TestRegistry_Start(t *testing.T) {
 	t.Parallel()
+	t.Run("basic", func(t *testing.T) {
+		t.Parallel()
+		reg := NewRegistry()
+		reg.Start()
+		assert.NotNil(t, reg.registrations)
+		assert.NotNil(t, reg.lookups)
+
+		testTimed(t, true, reg.Stop)
+	})
 	t.Run("nominal", func(t *testing.T) {
 		t.Parallel()
 		reg := NewRegistry()
 		reg.Start()
+
+		assert.NotNil(t, reg.registrations)
+		assert.NotNil(t, reg.lookups)
+
 		// sending a lookup should cause a deferral.
 		testCh := make(chan interface{}, 1)
+		gotResult := false
 		testTimed(t, true, func() {
 			reg.lookups <- &lookup{"bottle", testCh}
 		})
+
 		// but we shouldn't get a result
 		testTimed(t, false, func() {
 			<-testCh
-			fmt.Println("result acquired")
+			gotResult = true
 		})
 		testTimed(t, true, reg.Stop)
-
-		// and verify that stopping the manager shut down the lookups
-		assert.Eventually(t, func() bool { return reg.lookups == nil }, TestShortWait, TestWaitTick)
+		// until we stopped
+		assert.Eventually(t, func () bool { return gotResult }, TestShortWait, TestWaitTick)
 	})
 
 	t.Run("restart", func(t *testing.T) {
@@ -496,29 +512,31 @@ func TestRegistry_Start(t *testing.T) {
 		reg := NewRegistry()
 		reg.Stop()
 		require.Nil(t, reg.registrations)
+		require.Nil(t, reg.lookups)
+
 		reg.Start()
 		assert.NotNil(t, reg.registrations)
+		assert.NotNil(t, reg.lookups)
+
 		testTimed(t, true, func() { reg.Register("french", "fries") })
+
 		reg.Stop()
+
 		assert.Contains(t, reg.registry, "french")
 	})
 }
 
 func TestRegistry_Stop(t *testing.T) {
 	t.Parallel()
-	t.Run("closed", func(t *testing.T) {
+	t.Run("unset channel", func(t *testing.T) {
 		t.Parallel()
 		reg := &Registry{}
-		reg.Stop()
-	})
-	t.Run("immediately", func(t *testing.T) {
-		t.Parallel()
-		reg := NewRegistry()
 		testTimed(t, true, reg.Stop)
 	})
-	t.Run("on Done", func(t *testing.T) {
+	t.Run("with tasks", func(t *testing.T) {
 		t.Parallel()
 		reg := NewRegistry()
+		reg.registrations = make(chan *registration)
 		reg.waitgroup.Add(2)
 		testTimed(t, true, reg.Stop,
 			reg.waitgroup.Done,
@@ -527,6 +545,9 @@ func TestRegistry_Stop(t *testing.T) {
 	t.Run("channel closures", func(t *testing.T) {
 		t.Parallel()
 		reg := NewRegistry()
+		reg.registrations = make(chan *registration)
+		reg.lookups = make(chan *lookup)
+		defer close(reg.lookups)
 		reg.Stop()
 		assert.Nil(t, reg.registrations)
 		// but it shouldn't have touched the lookup channel, manager does that.
@@ -535,9 +556,13 @@ func TestRegistry_Stop(t *testing.T) {
 }
 
 func TestRegistry_Values(t *testing.T) {
-	reg := NewRegistry()
-	assert.NotNil(t, reg.pending)
+	t.Parallel()
 	t.Run("running", func(t *testing.T) {
+		t.Parallel()
+		reg := NewRegistry()
+		assert.Nil(t, reg.registrations)
+		reg.registrations = make(chan *registration)
+		defer close(reg.registrations)
 		val, err := reg.Values()
 		if assert.Error(t, err) {
 			assert.ErrorIs(t, err, ErrRunning)
@@ -545,7 +570,9 @@ func TestRegistry_Values(t *testing.T) {
 		}
 	})
 	t.Run("stopped", func(t *testing.T) {
-		reg.pending = nil
+		t.Parallel()
+		reg := NewRegistry()
+		assert.Nil(t, reg.registrations)
 		val, err := reg.Values()
 		if assert.Nil(t, err) {
 			assert.Equal(t, reg.registry, val)
@@ -558,6 +585,7 @@ func TestRegistry_Register(t *testing.T) {
 	t.Run("closed", func(t *testing.T) {
 		t.Parallel()
 		reg := NewRegistry()
+		reg.registrations = make(chan *registration)
 		close(reg.registrations)
 		assert.Panics(t, func() {
 			_, _, err := reg.Register("biscuit", nil)
@@ -569,9 +597,14 @@ func TestRegistry_Register(t *testing.T) {
 	t.Run("gets closed", func(t *testing.T) {
 		t.Parallel()
 		reg := NewRegistry()
+		// don't Start(), we need to fake it.
+		reg.registrations = make(chan *registration)
+
 		var value interface{}
 		var ok bool
 		var err error
+
+
 		// try to register (which will block, because, no manager),
 		// and then close the channel underneath it.
 		testTimed(t, true,
@@ -593,6 +626,7 @@ func TestRegistry_Register(t *testing.T) {
 		t.Parallel()
 		reg := NewRegistry()
 		reg.Start()
+		defer reg.Stop()
 		testTimed(t, true,
 			func() {
 				registered, ok, err := reg.Register("cookies", "cream")
@@ -631,10 +665,14 @@ func TestRegistry_Lookup(t *testing.T) {
 	t.Run("gets closed", func(t *testing.T) {
 		t.Parallel()
 		reg := NewRegistry()
+		reg.registrations = make(chan *registration)
+		defer close(reg.registrations)
+		reg.lookups = make(chan *lookup)
+
 		var value interface{}
 		var ok bool
 		var err error
-		// try to register (which will block, because, no manager),
+		// try to lookup (which will block, because, no manager),
 		// and then close the channel underneath it.
 		testTimed(t, true,
 			func() {
@@ -655,7 +693,6 @@ func TestRegistry_Lookup(t *testing.T) {
 		t.Parallel()
 		reg := NewRegistry()
 		reg.registry["fu"] = "bar"
-		reg.Stop()
 		var value interface{}
 		var ok = true
 		var err error
@@ -725,7 +762,6 @@ func TestRegistry_OnDefer(t *testing.T) {
 	t.Run("usage", func(t *testing.T) {
 		t.Parallel()
 		var invoked bool
-		var wg sync.WaitGroup
 
 		reg := NewRegistry()
 		reg.OnDefer(func() { invoked = true })
@@ -740,15 +776,11 @@ func TestRegistry_OnDefer(t *testing.T) {
 		assert.Never(t, func() bool { return invoked }, TestShortWait, TestWaitTick)
 
 		// park a deferred lookup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			reg.Lookup("fred")
-		}()
-
-		testTimed(t, true, func() { reg.Register("fred", nil) })
-		assert.Eventually(t, func() bool { return invoked }, TestLongWait, TestWaitTick)
-		assert.Eventually(t, func() bool { wg.Wait(); return true }, TestShortWait, TestWaitTick)
+		testTimed(t, true,
+			func() { reg.Lookup("fred") },
+			func() { reg.Register("fred", "barney") },
+		)
+		assert.True(t, invoked)
 	})
 }
 
@@ -768,7 +800,6 @@ func TestRegistry_OnResolve(t *testing.T) {
 
 	t.Run("usage", func(t *testing.T) {
 		t.Parallel()
-		var wg sync.WaitGroup
 		var count int
 
 		reg := NewRegistry()
@@ -784,22 +815,10 @@ func TestRegistry_OnResolve(t *testing.T) {
 		testTimed(t, true, func() { reg.Lookup("fred") })
 		assert.Never(t, func() bool { return count > 0 }, TestShortWait, TestWaitTick)
 
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			reg.Lookup("barney")
-		}()
-		go func() {
-			defer wg.Done()
-			reg.Lookup("barney")
-		}()
-
-		testWaitGroup(t, &wg, false, TestShortWait)
-		testTimed(t, true, func() { reg.Register("barney", nil) })
-		assert.Eventually(t, func() bool { return count == 2 }, TestShortWait, TestWaitTick)
-		testTimed(t, true, func() { reg.Register("fred", nil) })
-		assert.Never(t, func() bool { return count > 2 }, TestShortWait, TestWaitTick)
-
-		testTimed(t, true, wg.Wait)
+		testTimed(t, true,
+			func () { reg.Lookup("barney") },
+			func () { reg.Register("barney", "kibble") },
+		)
+		assert.Equal(t, 1, count)
 	})
 }
